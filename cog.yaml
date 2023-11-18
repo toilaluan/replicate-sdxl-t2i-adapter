@@ -1,0 +1,16 @@
+# Configuration for Cog ⚙️
+# Reference: https://github.com/replicate/cog/blob/main/docs/yaml.md
+
+build:
+  gpu: true
+
+  python_version: "3.10"
+  python_packages:
+    - "transformers==4.35.2"
+    - "diffusers==0.23.1"
+    - "accelerate==0.24.1"
+    - "controlnet-aux==0.0.7"
+  run:
+    - curl -L "https://civitai.com/api/download/models/198530?type=Model&format=SafeTensor&size=full&fp=fp16" --output juggernaut.safetensors
+    
+predict: "predict.py:Predictor"
