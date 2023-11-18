@@ -12,5 +12,6 @@ build:
     - "controlnet-aux==0.0.7"
   run:
     - curl -L "https://civitai.com/api/download/models/198530?type=Model&format=SafeTensor&size=full&fp=fp16" --output juggernaut.safetensors
-    
+    - apt-get update && apt-get install libgl1 -y
+    - pip install omegaconf
 predict: "predict.py:Predictor"

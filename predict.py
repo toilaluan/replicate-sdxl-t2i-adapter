@@ -4,6 +4,7 @@ from diffusers.utils import load_image
 import torch
 from controlnet_aux.pidi import PidiNetDetector
 import shutil
+from typing import List
 from PIL import Image
 
 class Predictor(BasePredictor):
@@ -12,51 +13,51 @@ class Predictor(BasePredictor):
         adapter = T2IAdapter.from_pretrained(
             "TencentARC/t2i-adapter-sketch-sdxl-1.0", torch_dtype=torch.float16
         )
-        self.pipe = StableDiffusionXLAdapterPipeline.from_single_file("juggernaut.safetensors", adapter=adapter, torch_dtype=torch.float16, use_safetensors=True)
-        self.pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(pipe.scheduler.config)
+        self.pipe = StableDiffusionXLAdapterPipeline.from_single_file("/juggernaut.safetensors", adapter=adapter, torch_dtype=torch.float16, use_safetensors=True)
+        self.pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(self.pipe.scheduler.config)
+        # self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead", fullgraph=True) 
         self.pipe.to("cuda")
-        self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead", fullgraph=True)
         self.pidinet = PidiNetDetector.from_pretrained("lllyasviel/Annotators")
 
-    def resize_square(self, image: Image.Image, size: int, fill_color=(0, 0, 0)):
+    from PIL import Image
+
+    def resize_and_pad(self, img, target_w, target_h, fill_color = (0,0,0)):
         """
-        Resize and pad an image to make it square by resizing the longer side.
+        Resize a PIL image to target width and height, padding with a fill color.
 
-        Args:
-            image (PIL.Image.Image): The input image.
-            size (int): The desired size of the square image (width and height).
-            fill_color (tuple, optional): The color to use for padding. Defaults to white (255, 255, 255).
-
-        Returns:
-            PIL.Image.Image: The square image.
+        :param img: PIL Image object.
+        :param target_w: Target width.
+        :param target_h: Target height.
+        :param fill_color: Fill color for padding (R, G, B).
+        :return: Resized and padded image.
         """
-        # Get the dimensions of the input image
-        width, height = image.size
+        # Calculate the aspect ratio of the input image and the target size.
+        original_w, original_h = img.size
+        ratio_img = original_w / original_h
+        ratio_target = target_w / target_h
 
-        # Determine the longer side and calculate the scaling factor
-        if width > height:
-            scale_factor = size / width
+        # Resize the image based on the aspect ratio.
+        if ratio_img > ratio_target:
+            # Image is wider than target aspect ratio.
+            new_height = int(original_h * target_w / original_w)
+            resized_img = img.resize((target_w, new_height), Image.LANCZOS)
         else:
-            scale_factor = size / height
+            # Image is taller than target aspect ratio.
+            new_width = int(original_w * target_h / original_h)
+            resized_img = img.resize((new_width, target_h), Image.LANCZOS)
 
-        # Calculate the new dimensions after resizing
-        new_width = int(width * scale_factor)
-        new_height = int(height * scale_factor)
+        # Create a new image with the specified fill color and target size.
+        new_img = Image.new("RGB", (target_w, target_h), fill_color)
 
-        # Resize the image using the calculated dimensions
-        resized_image = image.resize((new_width, new_height), Image.BICUBIC)
+        # Calculate the position to paste the resized image onto the new image.
+        paste_x = (target_w - resized_img.size[0]) // 2
+        paste_y = (target_h - resized_img.size[1]) // 2
 
-        # Create a new image with the desired size and fill it with the specified color
-        square_image = Image.new("RGB", (size, size), fill_color)
+        # Paste the resized image onto the new image.
+        new_img.paste(resized_img, (paste_x, paste_y))
 
-        # Calculate the position to paste the resized image in the center of the square
-        x_offset = (size - new_width) // 2
-        y_offset = (size - new_height) // 2
+        return new_img
 
-        # Paste the resized image onto the square canvas
-        square_image.paste(resized_image, (x_offset, y_offset))
-
-        return square_image
 
     def load_image(self, path):
         shutil.copyfile(path, "/tmp/image.png")
@@ -111,14 +112,17 @@ class Predictor(BasePredictor):
         seed: int = Input(
             description="Random seed. Leave blank to randomize the seed", default=None
         ),
-    ) -> Path:
+    ) -> List[Path]:
         """Run a single prediction on the model"""
         conditional_image = self.load_image(image)
         conditional_image = self.pidinet(conditional_image, detect_resolution=1024, image_resolution=1024, apply_filter=True)
         if generate_square:
-            conditional_image = self.resize_square(conditional_image, 1024)
+            conditional_image = self.resize_and_pad(conditional_image, 1024, 1024)
             height = 1024
             width = 1024
+        else:
+            conditional_image = self.resize_and_pad(conditional_image, width, height)
+
         if seed:
             generator = torch.manual_seed(seed)
         else:
