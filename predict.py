@@ -3,6 +3,7 @@ from diffusers import StableDiffusionXLAdapterPipeline, T2IAdapter, EulerAncestr
 from diffusers.utils import load_image
 import torch
 from controlnet_aux.pidi import PidiNetDetector
+from controlnet_aux.canny import CannyDetector
 import shutil
 from typing import List
 from PIL import Image
@@ -18,6 +19,7 @@ class Predictor(BasePredictor):
         # self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead", fullgraph=True) 
         self.pipe.to("cuda")
         self.pidinet = PidiNetDetector.from_pretrained("lllyasviel/Annotators")
+        self.canny_detector = CannyDetector()
 
     from PIL import Image
 
@@ -114,15 +116,18 @@ class Predictor(BasePredictor):
         ),
     ) -> List[Path]:
         """Run a single prediction on the model"""
-        conditional_image = self.load_image(image)
-        conditional_image = self.pidinet(conditional_image, detect_resolution=1024, image_resolution=1024, apply_filter=True)
+        rgb_conditional_image = self.load_image(image)
+        sketch_conditional_image = self.pidinet(rgb_conditional_image, detect_resolution=1024, image_resolution=1024, apply_filter=True)
+        canny_conditional_image = self.canny_detector(rgb_conditional_image, detect_resolution=1024, image_resolution=1024)
+        conditional_image = Image.fromarray(np.array(canny_conditional_image) + np.array(sketch_conditional_image))
+
         if generate_square:
             conditional_image = self.resize_and_pad(conditional_image, 1024, 1024)
             height = 1024
             width = 1024
         else:
             conditional_image = self.resize_and_pad(conditional_image, width, height)
-
+        conditional_image.save("control_image.png")
         if seed:
             generator = torch.manual_seed(seed)
         else:
