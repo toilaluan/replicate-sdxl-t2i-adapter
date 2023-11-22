@@ -1,5 +1,10 @@
 from cog import BasePredictor, Input, Path
-from diffusers import StableDiffusionXLAdapterPipeline, T2IAdapter, EulerAncestralDiscreteScheduler, AutoencoderKL
+from diffusers import (
+    StableDiffusionXLAdapterPipeline,
+    T2IAdapter,
+    EulerAncestralDiscreteScheduler,
+    AutoencoderKL,
+)
 from diffusers.utils import load_image
 import torch
 from controlnet_aux.pidi import PidiNetDetector
@@ -7,23 +12,32 @@ from controlnet_aux.canny import CannyDetector
 import shutil
 from typing import List
 from PIL import Image
+import numpy as np
+
 
 class Predictor(BasePredictor):
     def setup(self) -> None:
         """Load the model into memory to make running multiple predictions efficient"""
         adapter = T2IAdapter.from_pretrained(
-            "TencentARC/t2i-adapter-sketch-sdxl-1.0", torch_dtype=torch.float16
+            "/controlnet", torch_dtype=torch.float16
         )
-        self.pipe = StableDiffusionXLAdapterPipeline.from_single_file("/juggernaut.safetensors", adapter=adapter, torch_dtype=torch.float16, use_safetensors=True)
-        self.pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(self.pipe.scheduler.config)
-        # self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead", fullgraph=True) 
-        self.pipe.to("cuda")
+        self.pipe = StableDiffusionXLAdapterPipeline.from_single_file(
+            "/juggernaut.safetensors",
+            adapter=adapter,
+            torch_dtype=torch.float16,
+            use_safetensors=True,
+        )
+        self.pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(
+            self.pipe.scheduler.config
+        )
+        # self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead", fullgraph=True)
+        self.pipe.to("cuda:2")
         self.pidinet = PidiNetDetector.from_pretrained("lllyasviel/Annotators")
         self.canny_detector = CannyDetector()
 
     from PIL import Image
 
-    def resize_and_pad(self, img, target_w, target_h, fill_color = (0,0,0)):
+    def resize_and_pad(self, img, target_w, target_h, fill_color=(0, 0, 0)):
         """
         Resize a PIL image to target width and height, padding with a fill color.
 
@@ -60,11 +74,10 @@ class Predictor(BasePredictor):
 
         return new_img
 
-
     def load_image(self, path):
         shutil.copyfile(path, "/tmp/image.png")
         return load_image("/tmp/image.png").convert("RGB")
-    
+
     @torch.inference_mode()
     def predict(
         self,
@@ -74,11 +87,15 @@ class Predictor(BasePredictor):
         ),
         suffix_prompt: str = Input(
             description="Additional prompt",
-            default="textured, high quality, full detailed material, studio style, simple background, dslr, natural lighting, shot by camera, RAW image, photorealistic, sharp focus, 8k, uhd, file grain, masterpiece"
+            default="textured, high quality, full detailed material, studio style, simple background, dslr, natural lighting, shot by camera, RAW image, photorealistic, sharp focus, 8k, uhd, file grain, masterpiece",
         ),
         negative_prompt: str = Input(
             description="Input Negative Prompt",
             default="deformed, animation, anime, cartoon, comic, cropped, out of frame, low res, draft, cgi, low quality render, thumbnail",
+        ),
+        use_canny: bool = Input(
+            description="Whether to use canny detector for better details",
+            default=False,
         ),
         image: Path = Input(
             description="Input image for img2img or inpaint mode",
@@ -117,9 +134,21 @@ class Predictor(BasePredictor):
     ) -> List[Path]:
         """Run a single prediction on the model"""
         rgb_conditional_image = self.load_image(image)
-        sketch_conditional_image = self.pidinet(rgb_conditional_image, detect_resolution=1024, image_resolution=1024, apply_filter=True)
-        canny_conditional_image = self.canny_detector(rgb_conditional_image, detect_resolution=1024, image_resolution=1024)
-        conditional_image = Image.fromarray(np.array(canny_conditional_image) + np.array(sketch_conditional_image))
+        sketch_conditional_image = self.pidinet(
+            rgb_conditional_image,
+            detect_resolution=1024,
+            image_resolution=1024,
+            apply_filter=True,
+        )
+        canny_conditional_image = self.canny_detector(
+            rgb_conditional_image, detect_resolution=1024, image_resolution=1024
+        )
+        if use_canny:
+            conditional_image = Image.fromarray(
+                np.array(canny_conditional_image) + np.array(sketch_conditional_image)
+            )
+        else:
+            conditional_image = sketch_conditional_image
 
         if generate_square:
             conditional_image = self.resize_and_pad(conditional_image, 1024, 1024)
@@ -127,7 +156,6 @@ class Predictor(BasePredictor):
             width = 1024
         else:
             conditional_image = self.resize_and_pad(conditional_image, width, height)
-        conditional_image.save("control_image.png")
         if seed:
             generator = torch.manual_seed(seed)
         else:
@@ -136,7 +164,7 @@ class Predictor(BasePredictor):
 
         generated_images = self.pipe(
             prompt,
-            negative_prompt = negative_prompt,
+            negative_prompt=negative_prompt,
             image=conditional_image,
             generator=generator,
             num_inference_steps=num_inference_steps,
@@ -144,7 +172,7 @@ class Predictor(BasePredictor):
             width=width,
             guidance_scale=guidance_scale,
             num_images_per_prompt=num_outputs,
-            adapter_conditioning_scale = adapter_conditioning_scale,
+            adapter_conditioning_scale=adapter_conditioning_scale,
         ).images
 
         output_paths = []
@@ -152,5 +180,7 @@ class Predictor(BasePredictor):
             output_path = f"/tmp/out-{i}.png"
             image.save(output_path)
             output_paths.append(Path(output_path))
+        conditional_image.save(f"/tmp/out-{i+1}.png")
+        output_paths.append(Path(f"/tmp/out-{i+1}.png"))
 
         return output_paths
