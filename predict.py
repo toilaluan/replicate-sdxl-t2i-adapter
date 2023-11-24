@@ -31,7 +31,7 @@ class Predictor(BasePredictor):
             self.pipe.scheduler.config
         )
         # self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead", fullgraph=True)
-        self.pipe.to("cuda:2")
+        self.pipe.to("cuda")
         self.pidinet = PidiNetDetector.from_pretrained("lllyasviel/Annotators")
         self.canny_detector = CannyDetector()
 
