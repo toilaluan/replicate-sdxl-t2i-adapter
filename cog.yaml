@@ -10,8 +10,11 @@ build:
     - "diffusers==0.23.1"
     - "accelerate==0.24.1"
     - "controlnet-aux==0.0.7"
+    - "omegaconf"
   run:
     - curl -L "https://civitai.com/api/download/models/198530?type=Model&format=SafeTensor&size=full&fp=fp16" --output juggernaut.safetensors
     - apt-get update && apt-get install libgl1 -y
-    - pip install omegaconf
+    - mkdir controlnet
+    - curl -L "https://huggingface.co/TencentARC/t2i-adapter-sketch-sdxl-1.0/resolve/main/config.json?download=true" --output controlnet/config.json
+    - curl -L "https://huggingface.co/TencentARC/t2i-adapter-sketch-sdxl-1.0/resolve/main/diffusion_pytorch_model.safetensors?download=true" --output "controlnet/diffusion_pytorch_model.safetensors"
 predict: "predict.py:Predictor"
