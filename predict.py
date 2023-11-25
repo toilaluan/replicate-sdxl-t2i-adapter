@@ -27,15 +27,15 @@ class Predictor(BasePredictor):
             torch_dtype=torch.float16,
             use_safetensors=True,
         )
+
+        self.pipe.load_lora_weights("/realistic_lora.safetensors")
         self.pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(
             self.pipe.scheduler.config
         )
-        # self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead", fullgraph=True)
+
         self.pipe.to("cuda")
         self.pidinet = PidiNetDetector.from_pretrained("lllyasviel/Annotators")
         self.canny_detector = CannyDetector()
-
-    from PIL import Image
 
     def resize_and_pad(self, img, target_w, target_h, fill_color=(0, 0, 0)):
         """
@@ -96,6 +96,12 @@ class Predictor(BasePredictor):
         use_canny: bool = Input(
             description="Whether to use canny detector for better details",
             default=False,
+        ),
+        lora_scale: float = Input(
+            description="Adjust the scale of the LoRA model, a larger scale results in a greater impact.",
+            ge=0.0,
+            le=5.0,
+            default=0.0,
         ),
         image: Path = Input(
             description="Input image for img2img or inpaint mode",
@@ -173,6 +179,7 @@ class Predictor(BasePredictor):
             guidance_scale=guidance_scale,
             num_images_per_prompt=num_outputs,
             adapter_conditioning_scale=adapter_conditioning_scale,
+            cross_attention_kwargs={"scale": lora_scale},
         ).images
 
         output_paths = []
