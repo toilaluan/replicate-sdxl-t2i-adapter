@@ -11,9 +11,9 @@ build:
     - "accelerate==0.24.1"
     - "controlnet-aux==0.0.7"
     - "omegaconf"
+    - "compel"
   run:
     - curl -L "https://civitai.com/api/download/models/198530?type=Model&format=SafeTensor&size=full&fp=fp16" --output juggernaut.safetensors
-    - curl -L "https://civitai.com/api/download/models/126807?type=Model&format=SafeTensor" --output "realistic_lora.safetensors"
     - apt-get update && apt-get install libgl1 -y
     - mkdir controlnet
     - curl -L "https://huggingface.co/TencentARC/t2i-adapter-sketch-sdxl-1.0/resolve/main/config.json?download=true" --output controlnet/config.json

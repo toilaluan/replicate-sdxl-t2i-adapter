@@ -1,4 +1,8 @@
 from cog import BasePredictor, Input, Path
+from compel import Compel, ReturnedEmbeddingsType
+from urllib.request import urlretrieve
+import os
+import uuid
 from diffusers import (
     StableDiffusionXLAdapterPipeline,
     T2IAdapter,
@@ -15,25 +19,64 @@ from PIL import Image
 import numpy as np
 
 
+def hash_url(url):
+    return uuid.uuid3(uuid.NAMESPACE_URL, url)
+
+
+def resize_image(image, required_longer_side=1024, divisible=8):
+    """
+    Resize a Pillow image while keeping the aspect ratio and ensuring the longer side
+    is resized to the specified size (default: 1024 pixels) and the other side is
+    divisible by 8.
+
+    Args:
+        image (PIL.Image.Image): The input Pillow image.
+        required_longer_side (int): The desired size for the longer side.
+
+    Returns:
+        PIL.Image.Image: The resized image.
+    """
+    width, height = image.size
+
+    # Calculate the new dimensions while preserving the aspect ratio
+    if width >= height:
+        new_width = required_longer_side
+        new_height = int(height * (required_longer_side / width))
+    else:
+        new_height = required_longer_side
+        new_width = int(width * (required_longer_side / height))
+
+    # Ensure that the new dimensions are divisible by 8
+    new_width = (new_width // divisible) * divisible
+    new_height = (new_height // divisible) * divisible
+
+    # Resize the image using the new dimensions
+    resized_image = image.resize((new_width, new_height), Image.BICUBIC)
+
+    return resized_image
+
+
 class Predictor(BasePredictor):
     def setup(self) -> None:
         """Load the model into memory to make running multiple predictions efficient"""
-        adapter = T2IAdapter.from_pretrained(
-            "/controlnet", torch_dtype=torch.float16
-        )
+        adapter = T2IAdapter.from_pretrained("/controlnet", torch_dtype=torch.float16)
         self.pipe = StableDiffusionXLAdapterPipeline.from_single_file(
             "/juggernaut.safetensors",
             adapter=adapter,
             torch_dtype=torch.float16,
             use_safetensors=True,
         )
-
-        self.pipe.load_lora_weights("/realistic_lora.safetensors")
+        self.compel_proc = Compel(
+            tokenizer=[self.pipe.tokenizer, self.pipe.tokenizer_2],
+            text_encoder=[self.pipe.text_encoder, self.pipe.text_encoder_2],
+            returned_embeddings_type=ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NON_NORMALIZED,
+            requires_pooled=[False, True],
+        )
         self.pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(
             self.pipe.scheduler.config
         )
 
-        self.pipe.to("cuda")
+        self.pipe.to("cuda:2")
         self.pidinet = PidiNetDetector.from_pretrained("lllyasviel/Annotators")
         self.canny_detector = CannyDetector()
 
@@ -97,6 +140,10 @@ class Predictor(BasePredictor):
             description="Whether to use canny detector for better details",
             default=False,
         ),
+        lora_url: str = Input(
+            description="Link to LoRA Checkpoint. Leave blank to use the default weights.",
+            default="",
+        ),
         lora_scale: float = Input(
             description="Adjust the scale of the LoRA model, a larger scale results in a greater impact.",
             ge=0.0,
@@ -106,18 +153,6 @@ class Predictor(BasePredictor):
         image: Path = Input(
             description="Input image for img2img or inpaint mode",
             default=None,
-        ),
-        width: int = Input(
-            description="Width of output image",
-            default=1024,
-        ),
-        height: int = Input(
-            description="Height of output image",
-            default=1024,
-        ),
-        generate_square: bool = Input(
-            description="Whether generate square image, assert height == width",
-            default=False,
         ),
         num_outputs: int = Input(
             description="Number of images to output.",
@@ -139,6 +174,11 @@ class Predictor(BasePredictor):
         ),
     ) -> List[Path]:
         """Run a single prediction on the model"""
+        if lora_url:
+            lora_path = f"{hash_url(lora_url)}"
+            if not os.path.isfile(lora_path):
+                os.system(f'curl -L "{lora_url}" --output {lora_path}')
+            self.pipe.load_lora_weights(lora_path)
         rgb_conditional_image = self.load_image(image)
         sketch_conditional_image = self.pidinet(
             rgb_conditional_image,
@@ -155,21 +195,20 @@ class Predictor(BasePredictor):
             )
         else:
             conditional_image = sketch_conditional_image
-
-        if generate_square:
-            conditional_image = self.resize_and_pad(conditional_image, 1024, 1024)
-            height = 1024
-            width = 1024
-        else:
-            conditional_image = self.resize_and_pad(conditional_image, width, height)
+        conditional_image = resize_image(
+            conditional_image, required_longer_side=1024, divisible=16
+        )
+        width, height = conditional_image.size
         if seed:
             generator = torch.manual_seed(seed)
         else:
             generator = None
         prompt = f"{prompt}, {suffix_prompt}"
+        conditioning, pooled = self.compel_proc(prompt)
 
         generated_images = self.pipe(
-            prompt,
+            prompt_embeds=conditioning,
+            pooled_prompt_embeds=pooled,
             negative_prompt=negative_prompt,
             image=conditional_image,
             generator=generator,

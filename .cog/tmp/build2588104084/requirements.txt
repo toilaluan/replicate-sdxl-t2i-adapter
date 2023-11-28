@@ -1,0 +1,6 @@
+transformers==4.35.2
+diffusers==0.23.1
+accelerate==0.24.1
+controlnet-aux==0.0.7
+omegaconf
+compel

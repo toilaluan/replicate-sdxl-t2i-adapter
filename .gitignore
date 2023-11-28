@@ -1,0 +1,6 @@
+*.png
+*.pyc
+!test_sketch.jpg
+!temp.jpg
+*.safetensors
+*.whl
