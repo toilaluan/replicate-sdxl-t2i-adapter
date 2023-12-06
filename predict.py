@@ -51,7 +51,7 @@ def resize_image(image, required_longer_side=1024, divisible=8):
     new_height = (new_height // divisible) * divisible
 
     # Resize the image using the new dimensions
-    resized_image = image.resize((new_width, new_height), Image.BICUBIC)
+    resized_image = image.resize((new_width, new_height), Image.LANCZOS)
 
     return resized_image
 
@@ -76,8 +76,8 @@ class Predictor(BasePredictor):
             self.pipe.scheduler.config
         )
 
-        self.pipe.to("cuda:2")
-        self.pidinet = PidiNetDetector.from_pretrained("lllyasviel/Annotators")
+        self.pipe.to("cuda")
+        self.pidinet = PidiNetDetector.from_pretrained("lllyasviel/Annotators").to("cuda")
         self.canny_detector = CannyDetector()
 
     def resize_and_pad(self, img, target_w, target_h, fill_color=(0, 0, 0)):
@@ -174,12 +174,15 @@ class Predictor(BasePredictor):
         ),
     ) -> List[Path]:
         """Run a single prediction on the model"""
-        if lora_url:
+        if lora_scale > 0 and lora_url:
             lora_path = f"{hash_url(lora_url)}"
             if not os.path.isfile(lora_path):
                 os.system(f'curl -L "{lora_url}" --output {lora_path}')
             self.pipe.load_lora_weights(lora_path)
         rgb_conditional_image = self.load_image(image)
+        rgb_conditional_image = resize_image(
+            rgb_conditional_image, required_longer_side=1024, divisible=16
+        )
         sketch_conditional_image = self.pidinet(
             rgb_conditional_image,
             detect_resolution=1024,
@@ -195,9 +198,6 @@ class Predictor(BasePredictor):
             )
         else:
             conditional_image = sketch_conditional_image
-        conditional_image = resize_image(
-            conditional_image, required_longer_side=1024, divisible=16
-        )
         width, height = conditional_image.size
         if seed:
             generator = torch.manual_seed(seed)

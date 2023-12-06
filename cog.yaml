@@ -13,6 +13,7 @@ build:
     - "omegaconf"
     - "compel"
   run:
+    - pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118
     - curl -L "https://civitai.com/api/download/models/198530?type=Model&format=SafeTensor&size=full&fp=fp16" --output juggernaut.safetensors
     - apt-get update && apt-get install libgl1 -y
     - mkdir controlnet
